@@ -1,0 +1,789 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#4F46E5">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Sudoku">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="description" content="Jogo de Sudoku instalável, jogue offline a qualquer hora.">
+    <title>Sudoku PWA</title>
+
+    <!-- Manifest real do PWA -->
+    <link rel="manifest" href="manifest.json">
+
+    <!-- Ícones -->
+    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png">
+    <link rel="apple-touch-icon" href="icon-192.png">
+
+    <!-- Aplica o tema salvo (ou a preferência do sistema) antes da 1ª pintura, evitando flash -->
+    <script>
+        (function () {
+            try {
+                var stored = localStorage.getItem('sudoku-theme');
+                var theme = (stored === 'dark' || stored === 'light')
+                    ? stored
+                    : (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+                if (theme === 'dark') document.documentElement.classList.add('dark');
+            } catch (e) { /* localStorage indisponível: segue com tema claro padrão */ }
+        })();
+    </script>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = { darkMode: 'class' };
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    
+    <style>
+        :root {
+            --color-bg: #f3f4f6;             /* gray-100 */
+            --color-board-line: #111827;     /* gray-900 */
+            --color-cell-bg: #ffffff;
+            --color-cell-text: #374151;      /* gray-700 */
+            --color-given-text: #111827;     /* gray-900 */
+            --color-user-text: #2563EB;      /* blue-600 */
+            --color-error-text: #DC2626;     /* red-600 */
+            --color-error-bg: #FEE2E2;       /* red-100 */
+            --color-selected-bg: #DBEAFE;    /* blue-100 */
+            --color-highlight-bg: #E0E7FF;   /* indigo-100 */
+            --color-related-bg: #F3F4F6;     /* gray-100 */
+            --color-keypad-bg: #ffffff;
+            --color-keypad-border: #d1d5db;
+            --color-keypad-text: #1f2937;
+            --color-keypad-active-bg: #e5e7eb;
+            --color-keypad-disabled-bg: #f3f4f6;
+            --color-keypad-disabled-text: #9ca3af;
+            --color-keypad-disabled-border: #e5e7eb;
+        }
+
+        html.dark {
+            --color-bg: #0f172a;             /* slate-900 */
+            --color-board-line: #94a3b8;     /* slate-400 */
+            --color-cell-bg: #1e293b;        /* slate-800 */
+            --color-cell-text: #cbd5e1;      /* slate-300 */
+            --color-given-text: #f8fafc;     /* slate-50 */
+            --color-user-text: #60a5fa;      /* blue-400 */
+            --color-error-text: #fca5a5;     /* red-300 */
+            --color-error-bg: #7f1d1d;       /* red-900 */
+            --color-selected-bg: #1e3a8a;    /* blue-900 */
+            --color-highlight-bg: #312e81;   /* indigo-900 */
+            --color-related-bg: #1e293b;     /* slate-800 */
+            --color-keypad-bg: #1e293b;
+            --color-keypad-border: #334155;
+            --color-keypad-text: #e2e8f0;
+            --color-keypad-active-bg: #334155;
+            --color-keypad-disabled-bg: #0f172a;
+            --color-keypad-disabled-text: #475569;
+            --color-keypad-disabled-border: #334155;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--color-bg);
+            touch-action: manipulation; /* Previne zoom no duplo toque */
+            user-select: none;
+            -webkit-user-select: none;
+            transition: background-color 0.2s ease;
+        }
+
+        .sudoku-board {
+            display: grid;
+            grid-template-columns: repeat(9, 1fr);
+            grid-template-rows: repeat(9, 1fr);
+            width: 100%;
+            aspect-ratio: 1;
+            max-width: 450px;
+            margin: 0 auto;
+            border: 3px solid var(--color-board-line);
+            background-color: var(--color-board-line);
+            gap: 1px;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+        }
+
+        .sudoku-cell {
+            background-color: var(--color-cell-bg);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            aspect-ratio: 1 / 1;
+            font-size: clamp(1.25rem, 5vw, 1.75rem);
+            font-weight: 600;
+            color: var(--color-cell-text);
+            cursor: pointer;
+            transition: background-color 0.15s ease;
+        }
+
+        /* Bordas grossas para os blocos 3x3 (mesma espessura da borda externa do tabuleiro) */
+        .sudoku-cell { box-sizing: border-box; }
+        .sudoku-cell:nth-child(3n):not(:nth-child(9n)) { border-right: 6px solid var(--color-board-line); }
+
+        .sudoku-cell:nth-child(n+19):nth-child(-n+27),
+        .sudoku-cell:nth-child(n+46):nth-child(-n+54) { border-bottom: 6px solid var(--color-board-line); }
+
+        /* Estados das Células */
+        .cell-given {
+            color: var(--color-given-text);
+            font-weight: 700;
+        }
+        
+        .cell-user {
+            color: var(--color-user-text);
+        }
+        
+        .cell-error {
+            color: var(--color-error-text) !important;
+            background-color: var(--color-error-bg) !important;
+        }
+
+        .cell-selected {
+            background-color: var(--color-selected-bg) !important;
+        }
+
+        .cell-highlight {
+            background-color: var(--color-highlight-bg) !important;
+        }
+
+        .cell-related {
+            background-color: var(--color-related-bg);
+        }
+
+        /* Teclado */
+        .keypad-btn {
+            background: var(--color-keypad-bg);
+            border: 1px solid var(--color-keypad-border);
+            border-radius: 0.5rem;
+            box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: var(--color-keypad-text);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 3.5rem;
+            transition: all 0.1s;
+        }
+        .keypad-btn:active {
+            background: var(--color-keypad-active-bg);
+            transform: scale(0.95);
+        }
+        .keypad-action {
+            background: #4F46E5;
+            color: white;
+            border: none;
+            font-size: 1rem;
+        }
+        .keypad-action:active {
+            background: #4338CA;
+        }
+        .keypad-btn:disabled,
+        .keypad-btn-disabled {
+            background: var(--color-keypad-disabled-bg);
+            color: var(--color-keypad-disabled-text);
+            border-color: var(--color-keypad-disabled-border);
+            box-shadow: none;
+            cursor: not-allowed;
+            opacity: 0.6;
+        }
+        .keypad-btn:disabled:active {
+            transform: none;
+            background: var(--color-keypad-disabled-bg);
+        }
+        .difficulty-preset {
+            height: auto;
+            min-height: 3.5rem;
+            flex-direction: column;
+            line-height: 1.3;
+            padding: 0.5rem 0.25rem;
+        }
+        .keypad-btn-selected {
+            background: #4F46E5 !important;
+            color: #ffffff !important;
+            border-color: #4F46E5 !important;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col">
+
+    <header class="bg-indigo-600 text-white p-4 shadow-md flex justify-between items-center">
+        <h1 class="text-xl font-bold tracking-wide">Sudoku PWA</h1>
+        <div class="flex items-center gap-2">
+            <button id="btnThemeToggle" aria-label="Alternar tema claro/escuro" title="Alternar tema claro/escuro" class="bg-indigo-800 hover:bg-indigo-700 text-white p-2.5 rounded-full transition shadow-inner">
+                <!-- Ícone de sol (mostrado no tema escuro, para voltar ao claro) -->
+                <svg id="iconSun" xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="4"></circle>
+                    <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path>
+                </svg>
+                <!-- Ícone de lua (mostrado no tema claro, para ir ao escuro) -->
+                <svg id="iconMoon" xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"></path>
+                </svg>
+            </button>
+            <button id="btnInstall" class="hidden bg-white text-indigo-700 hover:bg-indigo-50 text-sm py-2 px-4 rounded-full transition shadow-inner font-semibold">
+                Instalar App
+            </button>
+            <button id="btnNewGame" class="bg-indigo-800 hover:bg-indigo-700 text-white text-sm py-2 px-4 rounded-full transition shadow-inner">
+                Nova Partida
+            </button>
+        </div>
+    </header>
+
+    <!-- Modal: escolha de quantos números iniciais serão revelados -->
+    <div id="difficultyModal" class="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+        <div class="bg-white dark:bg-slate-800 rounded-xl shadow-xl w-full max-w-sm p-6">
+            <h2 class="text-lg font-bold text-gray-900 dark:text-slate-100 mb-1">Nova Partida</h2>
+            <p class="text-sm text-gray-500 dark:text-slate-400 mb-4">Escolha quantos números já virão revelados no início.</p>
+
+            <div class="grid grid-cols-4 gap-2 mb-5">
+                <button type="button" class="difficulty-preset keypad-btn text-sm" data-clues="17">Especialista<br><span class="text-xs font-normal">17</span></button>
+                <button type="button" class="difficulty-preset keypad-btn text-sm" data-clues="28">Difícil<br><span class="text-xs font-normal">28</span></button>
+                <button type="button" class="difficulty-preset keypad-btn text-sm" data-clues="35">Médio<br><span class="text-xs font-normal">35</span></button>
+                <button type="button" class="difficulty-preset keypad-btn text-sm" data-clues="45">Fácil<br><span class="text-xs font-normal">45</span></button>
+            </div>
+
+            <label for="cluesRange" class="flex justify-between text-sm font-medium text-gray-700 dark:text-slate-300 mb-2">
+                <span>Números revelados</span>
+                <span id="cluesRangeValue" class="font-bold text-indigo-600 dark:text-indigo-400">30</span>
+            </label>
+            <input type="range" id="cluesRange" min="17" max="60" value="30" step="1" class="w-full accent-indigo-600 mb-6">
+
+            <button id="btnStartGame" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 rounded-lg transition shadow">
+                Iniciar Jogo
+            </button>
+        </div>
+    </div>
+
+    <main class="flex-grow flex flex-col items-center justify-center p-4">
+
+        <!-- Barra de estatísticas -->
+        <div class="w-full max-w-sm flex items-center justify-between mb-3 px-1 text-sm font-medium text-gray-600 dark:text-slate-300">
+            <span>Tempo: <span id="timerDisplay" class="font-bold text-gray-800 dark:text-slate-100 tabular-nums">00:00</span></span>
+            <span>Erros: <span id="errorCounter" class="font-bold text-red-600 dark:text-red-400">0</span></span>
+        </div>
+
+        <!-- Tabuleiro -->
+        <div id="board" class="sudoku-board rounded-lg overflow-hidden">
+            <!-- As células serão geradas via JS -->
+        </div>
+
+        <div id="winMessage" class="hidden mt-4 bg-green-100 dark:bg-green-900 border border-green-400 dark:border-green-700 text-green-700 dark:text-green-300 px-4 py-3 rounded relative w-full max-w-sm text-center font-semibold shadow" role="alert">
+            Parabéns! Você resolveu o Sudoku!
+        </div>
+
+        <div class="mt-6 w-full max-w-sm">
+            <div class="grid grid-cols-5 gap-2 mb-2">
+                <button class="keypad-btn" data-val="1">1</button>
+                <button class="keypad-btn" data-val="2">2</button>
+                <button class="keypad-btn" data-val="3">3</button>
+                <button class="keypad-btn" data-val="4">4</button>
+                <button class="keypad-btn" data-val="5">5</button>
+            </div>
+            <div class="grid grid-cols-5 gap-2">
+                <button class="keypad-btn" data-val="6">6</button>
+                <button class="keypad-btn" data-val="7">7</button>
+                <button class="keypad-btn" data-val="8">8</button>
+                <button class="keypad-btn" data-val="9">9</button>
+                <button class="keypad-btn keypad-action flex-col" id="btnErase">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2M3 12l6.414 6.414a2 2 0 001.414.586H19a2 2 0 002-2V7a2 2 0 00-2-2h-8.172a2 2 0 00-1.414.586L3 12z" />
+                    </svg>
+                    <span class="text-xs mt-1">Apagar</span>
+                </button>
+            </div>
+        </div>
+
+    </main>
+
+    <script>
+        // Variáveis de Estado
+        let solvedGrid = []; // Tabuleiro com a solução completa
+        let puzzleGrid = []; // Tabuleiro inicial com as dicas (0 para vazio)
+        let userGrid = [];   // Tabuleiro atual com inserções do usuário
+        
+        let selectedRow = -1;
+        let selectedCol = -1;
+        let errorCount = 0; // Contador de erros cometidos durante a partida
+        let elapsedSeconds = 0; // Tempo decorrido na partida atual (em segundos)
+        let timerInterval = null; // Referência do setInterval do cronômetro
+        
+        const BOARD_SIZE = 9;
+        let TARGET_CLUES = 30; // Quantidade de números revelados no início (ajustável pelo jogador)
+        const MIN_DISTINCT_DIGITS = 7; // Requisito: pelo menos 7 dígitos diferentes entre as dicas
+
+        const boardEl = document.getElementById('board');
+        const winMessageEl = document.getElementById('winMessage');
+
+        
+        // Utilitário para criar matriz 9x9 vazia
+        function createEmptyGrid() {
+            return Array.from({ length: BOARD_SIZE }, () => Array(BOARD_SIZE).fill(0));
+        }
+
+        // Verifica se é seguro colocar um número na posição
+        function isSafe(grid, row, col, num) {
+            // Checa Linha e Coluna
+            for (let x = 0; x < BOARD_SIZE; x++) {
+                if (grid[row][x] === num) return false;
+                if (grid[x][col] === num) return false;
+            }
+            // Checa Sub-bloco 3x3
+            let startRow = row - row % 3;
+            let startCol = col - col % 3;
+            for (let i = 0; i < 3; i++) {
+                for (let j = 0; j < 3; j++) {
+                    if (grid[i + startRow][j + startCol] === num) return false;
+                }
+            }
+            return true;
+        }
+
+        // Preenche o tabuleiro resolvendo-o via Backtracking com aleatoriedade
+        function fillGrid(grid) {
+            let row = -1;
+            let col = -1;
+            let isEmpty = true;
+
+            // Busca próxima célula vazia
+            for (let i = 0; i < BOARD_SIZE; i++) {
+                for (let j = 0; j < BOARD_SIZE; j++) {
+                    if (grid[i][j] === 0) {
+                        row = i;
+                        col = j;
+                        isEmpty = false;
+                        break;
+                    }
+                }
+                if (!isEmpty) break;
+            }
+
+            // Se não tem vazio, está resolvido
+            if (isEmpty) return true;
+
+            // Tenta números aleatórios de 1 a 9 para gerar jogos únicos
+            let nums = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+            nums.sort(() => Math.random() - 0.5); // Embaralha
+
+            for (let i = 0; i < nums.length; i++) {
+                if (isSafe(grid, row, col, nums[i])) {
+                    grid[row][col] = nums[i];
+                    if (fillGrid(grid)) return true;
+                    // Se falhar, reseta e tenta o próximo
+                    grid[row][col] = 0;
+                }
+            }
+            return false;
+        }
+
+        
+        // Gera o Puzzle final
+        function generateGame() {
+            // 1. Gera solução completa aleatória
+            solvedGrid = createEmptyGrid();
+            // Preenche a diagonal de caixas 3x3 para acelerar a geração aleatória
+            fillDiagonal(solvedGrid);
+            // Preenche o resto
+            fillGrid(solvedGrid);
+
+            // 2. Remove células para sobrar TARGET_CLUES dicas (escolhido pelo jogador),
+            //    garantindo pelo menos 7 dígitos diferentes entre elas
+            puzzleGrid = removeCellsEnsuringDiversity(solvedGrid);
+
+            // 3. Inicia grade do usuário igual ao puzzle
+            userGrid = JSON.parse(JSON.stringify(puzzleGrid));
+            
+            // 4. Reseta seleção, erros, cronômetro e renderiza
+            selectedRow = -1;
+            selectedCol = -1;
+            errorCount = 0;
+            winMessageEl.classList.add('hidden');
+            startTimer();
+            renderBoard();
+        }
+
+        // ---- Cronômetro ----
+        function startTimer() {
+            stopTimer(); // Garante que não haja mais de um intervalo rodando
+            elapsedSeconds = 0;
+            updateTimerDisplay();
+            timerInterval = setInterval(() => {
+                elapsedSeconds++;
+                updateTimerDisplay();
+            }, 1000);
+        }
+
+        function stopTimer() {
+            if (timerInterval) {
+                clearInterval(timerInterval);
+                timerInterval = null;
+            }
+        }
+
+        function updateTimerDisplay() {
+            const el = document.getElementById('timerDisplay');
+            if (!el) return;
+            const minutes = Math.floor(elapsedSeconds / 60).toString().padStart(2, '0');
+            const seconds = (elapsedSeconds % 60).toString().padStart(2, '0');
+            el.textContent = `${minutes}:${seconds}`;
+        }
+
+        // Conta quantos dígitos diferentes (1-9) aparecem no tabuleiro
+        function countDistinctDigits(grid) {
+            const seen = new Set();
+            for (let r = 0; r < BOARD_SIZE; r++) {
+                for (let c = 0; c < BOARD_SIZE; c++) {
+                    if (grid[r][c] !== 0) seen.add(grid[r][c]);
+                }
+            }
+            return seen.size;
+        }
+
+        // Retorna as 9 posições [r,c] pertencentes ao quadrante (bloco 3x3)
+        // identificado por boxRow/boxCol (cada um de 0 a 2)
+        function getBoxCells(boxRow, boxCol) {
+            const cells = [];
+            const startRow = boxRow * 3;
+            const startCol = boxCol * 3;
+            for (let i = 0; i < 3; i++) {
+                for (let j = 0; j < 3; j++) {
+                    cells.push([startRow + i, startCol + j]);
+                }
+            }
+            return cells;
+        }
+
+        // Embaralha um array (Fisher-Yates)
+        function shuffleArray(arr) {
+            for (let i = arr.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [arr[i], arr[j]] = [arr[j], arr[i]];
+            }
+            return arr;
+        }
+
+        // Remove células da solução até sobrar TARGET_CLUES dicas, distribuindo-as
+        // de forma equilibrada entre os 9 quadrantes (no máx. 1 de diferença entre
+        // eles) e repetindo a tentativa até que as dicas contenham pelo menos
+        // MIN_DISTINCT_DIGITS dígitos diferentes
+        function removeCellsEnsuringDiversity(solved) {
+            const TOTAL_BOXES = 9;
+            const MAX_ATTEMPTS = 500;
+            let puzzle;
+
+            // Quantas dicas cada quadrante deve receber (o mais equilibrado possível)
+            const baseCluesPerBox = Math.floor(TARGET_CLUES / TOTAL_BOXES);
+            const extraClues = TARGET_CLUES % TOTAL_BOXES; // sobra distribuída 1 a 1
+
+            for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+                puzzle = JSON.parse(JSON.stringify(solved));
+
+                // Sorteia quais quadrantes recebem a dica "extra" (+1) nesta tentativa
+                const boxOrder = shuffleArray([0, 1, 2, 3, 4, 5, 6, 7, 8]);
+                const cluesPerBox = new Array(TOTAL_BOXES).fill(baseCluesPerBox);
+                for (let i = 0; i < extraClues; i++) {
+                    cluesPerBox[boxOrder[i]] += 1;
+                }
+
+                // Para cada quadrante, mantém aleatoriamente a quantidade definida
+                // de células e apaga as demais
+                for (let b = 0; b < TOTAL_BOXES; b++) {
+                    const boxRow = Math.floor(b / 3);
+                    const boxCol = b % 3;
+                    const cells = shuffleArray(getBoxCells(boxRow, boxCol));
+                    const keepCount = Math.min(cluesPerBox[b], cells.length);
+
+                    for (let i = keepCount; i < cells.length; i++) {
+                        const [r, c] = cells[i];
+                        puzzle[r][c] = 0;
+                    }
+                }
+
+                if (countDistinctDigits(puzzle) >= MIN_DISTINCT_DIGITS) {
+                    return puzzle;
+                }
+            }
+
+            // Fallback (extremamente improvável de ser necessário): retorna a
+            // última tentativa mesmo que não tenha atingido o mínimo desejado
+            return puzzle;
+        }
+
+        // Ajuda na geração aleatória inicializando as 3 caixas diagonais
+        function fillDiagonal(grid) {
+            for (let i = 0; i < BOARD_SIZE; i = i + 3) {
+                fillBox(grid, i, i);
+            }
+        }
+
+        function fillBox(grid, rowStart, colStart) {
+            let num;
+            for (let i = 0; i < 3; i++) {
+                for (let j = 0; j < 3; j++) {
+                    do {
+                        num = Math.floor(Math.random() * 9) + 1;
+                    } while (!isSafeInBox(grid, rowStart, colStart, num));
+                    grid[rowStart + i][colStart + j] = num;
+                }
+            }
+        }
+
+        function isSafeInBox(grid, rowStart, colStart, num) {
+            for (let i = 0; i < 3; i++) {
+                for (let j = 0; j < 3; j++) {
+                    if (grid[rowStart + i][colStart + j] === num) return false;
+                }
+            }
+            return true;
+        }
+
+        
+        function renderBoard() {
+            boardEl.innerHTML = '';
+            
+            let highlightValue = null;
+            if (selectedRow > -1 && selectedCol > -1) {
+                highlightValue = userGrid[selectedRow][selectedCol];
+            }
+
+            for (let r = 0; r < BOARD_SIZE; r++) {
+                for (let c = 0; c < BOARD_SIZE; c++) {
+                    const cell = document.createElement('div');
+                    cell.classList.add('sudoku-cell');
+                    cell.dataset.row = r;
+                    cell.dataset.col = c;
+
+                    let val = userGrid[r][c];
+                    let isGiven = puzzleGrid[r][c] !== 0;
+
+                    if (val !== 0) {
+                        cell.textContent = val;
+                        if (isGiven) {
+                            cell.classList.add('cell-given');
+                        } else {
+                            cell.classList.add('cell-user');
+                            // Valida contra o solvedGrid. Se errado, pinta de vermelho.
+                            if (val !== solvedGrid[r][c]) {
+                                cell.classList.add('cell-error');
+                            }
+                        }
+                    }
+
+                    // Destaque da célula selecionada
+                    if (r === selectedRow && c === selectedCol) {
+                        cell.classList.add('cell-selected');
+                    }
+                    // Destaque de células relacionadas (mesma linha, coluna ou caixa 3x3)
+                    else if (selectedRow > -1 && selectedCol > -1) {
+                        let isSameRow = r === selectedRow;
+                        let isSameCol = c === selectedCol;
+                        let isSameBox = Math.floor(r / 3) === Math.floor(selectedRow / 3) && 
+                                        Math.floor(c / 3) === Math.floor(selectedCol / 3);
+                        
+                        if (isSameRow || isSameCol || isSameBox) {
+                            cell.classList.add('cell-related');
+                        }
+                    }
+
+                    // Destaque global dos números iguais (Apenas se não for erro)
+                    if (highlightValue && highlightValue !== 0 && val === highlightValue) {
+                        // Não destaco erros do usuário, só destaco se for número "certo" ou idêntico
+                         cell.classList.add('cell-highlight');
+                    }
+
+                    // Evento de Click na Célula
+                    cell.addEventListener('click', () => {
+                        selectedRow = r;
+                        selectedCol = c;
+                        renderBoard(); // Re-renderiza para aplicar cores
+                    });
+
+                    boardEl.appendChild(cell);
+                }
+            }
+            
+            checkWin();
+            updateKeypadState();
+            updateErrorCounterDisplay();
+        }
+
+        // Atualiza o número exibido na barra de estatísticas
+        function updateErrorCounterDisplay() {
+            const el = document.getElementById('errorCounter');
+            if (el) el.textContent = errorCount;
+        }
+
+        // Desabilita o botão de um dígito quando ele já foi corretamente
+        // preenchido nas 9 células do tabuleiro (linha, coluna ou dica)
+        function updateKeypadState() {
+            const counts = {};
+            for (let d = 1; d <= 9; d++) counts[d] = 0;
+
+            for (let r = 0; r < BOARD_SIZE; r++) {
+                for (let c = 0; c < BOARD_SIZE; c++) {
+                    const val = userGrid[r][c];
+                    // Só conta como "completo" se o valor estiver correto
+                    if (val !== 0 && val === solvedGrid[r][c]) {
+                        counts[val]++;
+                    }
+                }
+            }
+
+            document.querySelectorAll('.keypad-btn[data-val]').forEach((btn) => {
+                const digit = parseInt(btn.dataset.val, 10);
+                const isComplete = counts[digit] === 9;
+                btn.disabled = isComplete;
+                btn.classList.toggle('keypad-btn-disabled', isComplete);
+            });
+        }
+
+
+        // Eventos do Teclado
+        document.querySelectorAll('.keypad-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                if (e.currentTarget.disabled) return; // Dígito já completo (9/9 corretos)
+                if (selectedRow === -1 || selectedCol === -1) return; // Nenhuma célula selecionada
+                
+                // Se for uma célula Dica (Fixa), não podemos alterar
+                if (puzzleGrid[selectedRow][selectedCol] !== 0) return;
+
+                let val = e.currentTarget.dataset.val;
+
+                if (val) {
+                    // Clicou num número (1-9)
+                    const numVal = parseInt(val, 10);
+                    userGrid[selectedRow][selectedCol] = numVal;
+                    // Conta como erro sempre que o número inserido não for o correto
+                    if (numVal !== solvedGrid[selectedRow][selectedCol]) {
+                        errorCount++;
+                    }
+                } else if (e.currentTarget.id === 'btnErase') {
+                    // Clicou em Apagar
+                    userGrid[selectedRow][selectedCol] = 0;
+                }
+                
+                renderBoard();
+            });
+        });
+
+        // Elementos do modal de dificuldade
+        const difficultyModal = document.getElementById('difficultyModal');
+        const clueRangeInput = document.getElementById('cluesRange');
+        const clueRangeValue = document.getElementById('cluesRangeValue');
+        const btnStartGame = document.getElementById('btnStartGame');
+        const presetButtons = document.querySelectorAll('.difficulty-preset');
+
+        function highlightMatchingPreset(value) {
+            presetButtons.forEach((b) => {
+                b.classList.toggle('keypad-btn-selected', parseInt(b.dataset.clues, 10) === value);
+            });
+        }
+
+        function openDifficultyModal() {
+            clueRangeInput.value = TARGET_CLUES;
+            clueRangeValue.textContent = TARGET_CLUES;
+            highlightMatchingPreset(TARGET_CLUES);
+            difficultyModal.classList.remove('hidden');
+        }
+
+        clueRangeInput.addEventListener('input', () => {
+            clueRangeValue.textContent = clueRangeInput.value;
+            highlightMatchingPreset(parseInt(clueRangeInput.value, 10));
+        });
+
+        presetButtons.forEach((btn) => {
+            btn.addEventListener('click', () => {
+                const clues = parseInt(btn.dataset.clues, 10);
+                clueRangeInput.value = clues;
+                clueRangeValue.textContent = clues;
+                highlightMatchingPreset(clues);
+            });
+        });
+
+        btnStartGame.addEventListener('click', () => {
+            TARGET_CLUES = parseInt(clueRangeInput.value, 10);
+            difficultyModal.classList.add('hidden');
+            generateGame();
+        });
+
+        // ---- Tema Claro/Escuro ----
+        const THEME_STORAGE_KEY = 'sudoku-theme';
+        const iconSun = document.getElementById('iconSun');
+        const iconMoon = document.getElementById('iconMoon');
+
+        function updateThemeIcon(isDark) {
+            iconSun.classList.toggle('hidden', !isDark);
+            iconMoon.classList.toggle('hidden', isDark);
+        }
+
+        // Sincroniza os ícones com o tema já aplicado no <head> (evita flash)
+        updateThemeIcon(document.documentElement.classList.contains('dark'));
+
+        document.getElementById('btnThemeToggle').addEventListener('click', () => {
+            const isDark = document.documentElement.classList.toggle('dark');
+            updateThemeIcon(isDark);
+            try {
+                localStorage.setItem(THEME_STORAGE_KEY, isDark ? 'dark' : 'light');
+            } catch (e) { /* localStorage indisponível: apenas não persiste a escolha */ }
+        });
+
+        // Evento Nova Partida: reabre o modal para escolher a quantidade de dicas
+        document.getElementById('btnNewGame').addEventListener('click', () => {
+            openDifficultyModal();
+        });
+
+        // Verifica Vitória
+        function checkWin() {
+            let isWin = true;
+            for (let r = 0; r < BOARD_SIZE; r++) {
+                for (let c = 0; c < BOARD_SIZE; c++) {
+                    if (userGrid[r][c] !== solvedGrid[r][c]) {
+                        isWin = false;
+                        break;
+                    }
+                }
+                if (!isWin) break;
+            }
+
+            if (isWin && boardEl.children.length > 0) {
+                winMessageEl.classList.remove('hidden');
+                selectedRow = -1;
+                selectedCol = -1;
+                stopTimer();
+            }
+        }
+
+        // Na primeira carga, o modal de dificuldade já é exibido por padrão
+        // (veja o HTML: #difficultyModal). O jogo só é gerado quando o
+        // jogador confirma em "Iniciar Jogo" (ver listener de btnStartGame).
+        highlightMatchingPreset(TARGET_CLUES);
+
+        // Registra o Service Worker (necessário para funcionar offline e ser instalável)
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('sw.js')
+                    .then((reg) => console.log('Service Worker registrado com sucesso:', reg.scope))
+                    .catch((err) => console.error('Falha ao registrar o Service Worker:', err));
+            });
+        }
+
+        // Captura o evento de instalação para oferecer um botão "Instalar App" (opcional)
+        let deferredPrompt;
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            deferredPrompt = e;
+            const installBtn = document.getElementById('btnInstall');
+            if (installBtn) {
+                installBtn.classList.remove('hidden');
+                installBtn.addEventListener('click', async () => {
+                    installBtn.classList.add('hidden');
+                    deferredPrompt.prompt();
+                    await deferredPrompt.userChoice;
+                    deferredPrompt = null;
+                });
+            }
+        });
+    </script>
+</body>
+</html>
